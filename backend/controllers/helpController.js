@@ -1,6 +1,7 @@
 // backend/controllers/helpController.js
 import { pool } from '../db/db.js';
 import { notify } from '../queues/sns.js';
+export { updateHelpRequestStatus as replyToHelpRequest };
 
 /**
  * POST /api/help/create

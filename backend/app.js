@@ -1,13 +1,14 @@
+// backend/app.js
 import express from 'express';
 import cors from 'cors';
 import { pool } from './db/db.js';
 import authRoutes from './routes/authRoutes.js';
 import helpRoutes from './routes/helpRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
-import threadRoutes from './routes/threadRoutes.js'; // ensure this file exists & exports default
+import threadRoutes from './routes/threadRoutes.js';
 
 const app = express();
-app.use(cors());
+app.use(cors({ origin: process.env.CORS_ORIGIN?.split(',') || '*', credentials: true }));
 app.use(express.json());
 
 app.get('/api/ping', async (_req, res) => {
@@ -21,7 +22,7 @@ app.get('/api/ping', async (_req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
-app.use('/api/help', helpRoutes);     // ← only this, once
+app.use('/api/help', helpRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/threads', threadRoutes);
 

@@ -1,165 +1,112 @@
-// backend/controllers/threadController.js
+// backend/controllers/helpController.js
 import { pool } from '../db/db.js';
-import { notify } from '../queues/sns.js';
-
-async function notifySafe(subject, payload) {
-    try {
-        if (process.env.SNS_TOPIC_ARN) {
-            await notify(subject, payload);
-        }
-    } catch (e) {
-        console.error('[sns.notify] failed:', e?.message || e);
-    }
-}
 
 /**
- * POST /api/threads   (body: { title, body })
+ * POST /api/help
+ * body: { title, message }
+ * role: student
  */
-export async function createThread(req, res, next) {
+export async function submitHelpRequest(req, res) {
+    const userId = req.user?.id;
+    const { title, message } = req.body || {};
+    if (!userId || !title || !message) {
+        return res.status(400).json({ error: 'userId/title/message required' });
+    }
     try {
-        const { title, body } = req.body || {};
-        const userId = req.user?.id;
-        if (!userId || !title) {
-            return res.status(400).json({ error: 'userId/title required' });
-        }
-
-        const [result] = await pool.query(
-            `INSERT INTO help_threads (user_id, title, status, created_at)
-       VALUES (?, ?, 'open', NOW())`,
-            [userId, title]
+        await pool.query(
+            `INSERT INTO help_requests (user_id, title, message, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'open', NOW(), NOW())`,
+            [userId, title, message]
         );
-        const threadId = result.insertId;
-
-        if (body) {
-            await pool.query(
-                `INSERT INTO help_messages (thread_id, sender_id, body, sent_at)
-         VALUES (?, ?, ?, NOW())`,
-                [threadId, userId, body]
-            );
-        }
-
-        await notifySafe('New Thread Created', {
-            threadId,
-            ownerId: userId,
-            title,
-            firstMessage: body || '',
-            createdAt: new Date().toISOString(),
-        });
-
-        res.status(201).json({ threadId, title, status: 'open' });
+        res.status(201).json({ message: 'Help request submitted' });
     } catch (err) {
-        next(err);
+        console.error('[help.submit]', err);
+        res.status(500).json({ error: 'Unable to submit request' });
     }
 }
 
 /**
- * GET /api/threads  (admin = all; student = mine)
+ * GET /api/help/mine
+ * role: student
  */
-export async function listThreads(req, res, next) {
+export async function getUserHelpRequests(req, res) {
+    const userId = req.user?.id;
     try {
-        const isAdmin = req.user?.role === 'admin';
-        const userId = req.user?.id;
-
-        const sql = isAdmin
-            ? `SELECT t.*, u.name AS owner_name
-         FROM help_threads t
-         JOIN users u ON u.id = t.user_id
-         ORDER BY t.created_at DESC`
-            : `SELECT t.*, u.name AS owner_name
-         FROM help_threads t
-         JOIN users u ON u.id = t.user_id
-         WHERE t.user_id = ?
-         ORDER BY t.created_at DESC`;
-
-        const params = isAdmin ? [] : [userId];
-        const [rows] = await pool.query(sql, params);
+        const [rows] = await pool.query(
+            `SELECT hr.*, u.name AS admin_name
+       FROM help_requests hr
+       LEFT JOIN users u ON hr.admin_id = u.id
+       WHERE hr.user_id = ?
+       ORDER BY hr.created_at DESC`,
+            [userId]
+        );
         res.json(rows);
     } catch (err) {
-        next(err);
+        console.error('[help.mine]', err);
+        res.status(500).json({ error: 'Unable to fetch requests' });
     }
 }
 
 /**
- * GET /api/threads/:id   (thread + messages)
+ * GET /api/help
+ * role: admin
  */
-export async function getThread(req, res, next) {
+export async function getAllHelpRequests(_req, res) {
     try {
-        const { id } = req.params;
-
-        const [[thread]] = await pool.query(
-            `SELECT t.*, u.name AS owner_name
-       FROM help_threads t
-       JOIN users u ON u.id = t.user_id
-       WHERE t.id = ?`,
-            [id]
+        const [rows] = await pool.query(
+            `SELECT hr.*, su.name AS student_name, au.name AS admin_name
+       FROM help_requests hr
+       JOIN users su ON su.id = hr.user_id
+       LEFT JOIN users au ON au.id = hr.admin_id
+       ORDER BY hr.created_at DESC`
         );
-        if (!thread) return res.status(404).json({ error: 'Thread not found' });
-
-        const [messages] = await pool.query(
-            `SELECT m.*, u.name AS sender_name
-       FROM help_messages m
-       JOIN users u ON u.id = m.sender_id
-       WHERE m.thread_id = ?
-       ORDER BY m.sent_at ASC`,
-            [id]
-        );
-
-        res.json({ thread, messages });
+        res.json(rows);
     } catch (err) {
-        next(err);
+        console.error('[help.all]', err);
+        res.status(500).json({ error: 'Unable to fetch help requests' });
     }
 }
 
 /**
- * POST /api/threads/:id/messages   (body: { body })
+ * PATCH /api/help/:id/status
+ * or POST /api/help/:id/reply (compat)
+ * body: { status, admin_note }
+ * role: admin
  */
-export async function addMessage(req, res, next) {
+export async function updateHelpRequestStatus(req, res) {
+    const { id } = req.params;
+    const adminId = req.user?.id;
+    const { status, admin_note } = req.body || {};
+    if (!status) return res.status(400).json({ error: 'status required' });
+
     try {
-        const { id } = req.params;
-        const { body } = req.body || {};
-        const senderId = req.user?.id;
-
-        if (!senderId || !body) {
-            return res.status(400).json({ error: 'sender/body required' });
-        }
-
-        const [[exists]] = await pool.query(
-            `SELECT id FROM help_threads WHERE id = ?`,
-            [id]
-        );
-        if (!exists) return res.status(404).json({ error: 'Thread not found' });
-
-        const [result] = await pool.query(
-            `INSERT INTO help_messages (thread_id, sender_id, body, sent_at)
-       VALUES (?, ?, ?, NOW())`,
-            [id, senderId, body]
-        );
-
-        await notifySafe('New Thread Message', {
-            threadId: Number(id),
-            senderId,
-            body,
-            createdAt: new Date().toISOString(),
-        });
-
-        res.status(201).json({ id: result.insertId, thread_id: Number(id) });
-    } catch (err) {
-        next(err);
-    }
-}
-
-/**
- * PATCH /api/threads/:id/close   (admin)
- */
-export async function closeThread(req, res, next) {
-    try {
-        const { id } = req.params;
         await pool.query(
-            `UPDATE help_threads SET status='closed' WHERE id=?`,
-            [id]
+            `UPDATE help_requests
+         SET status = ?, admin_id = ?, admin_note = ?, updated_at = NOW()
+       WHERE id = ?`,
+            [status, adminId || null, admin_note || null, id]
         );
-        res.json({ ok: true, id: Number(id), status: 'closed' });
+        res.json({ ok: true, id: Number(id), status });
     } catch (err) {
-        next(err);
+        console.error('[help.updateStatus]', err);
+        res.status(500).json({ error: 'Unable to update status' });
+    }
+}
+
+/**
+ * DELETE /api/help/:id
+ * role: admin
+ */
+export async function deleteHelpRequest(req, res) {
+    const { id } = req.params;
+    try {
+        const [result] = await pool.query(`DELETE FROM help_requests WHERE id = ?`, [id]);
+        if (result.affectedRows === 0) {
+            return res.status(404).json({ error: 'Help request not found' });
+        }
+        res.json({ ok: true, id: Number(id), message: 'Help request deleted' });
+    } catch (err) {
+        console.error('[help.delete]', err);
+        res.status(500).json({ error: 'Unable to delete request' });
     }
 }

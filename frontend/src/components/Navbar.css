@@ -1,0 +1,49 @@
+.nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 28px;
+    background: #111;
+    color: #fff;
+    z-index: 1000
+}
+
+.logo {
+    font-weight: 700;
+    font-size: 1.3rem
+}
+
+ul {
+    display: flex;
+    gap: 20px;
+    list-style: none;
+    margin: 0
+}
+
+a {
+    color: #fff;
+    text-decoration: none;
+    cursor: pointer
+}
+
+a.active {
+    border-bottom: 2px solid #fff
+}
+
+.logout-btn {
+    background: #ff6464;
+    color: #fff;
+    border: none;
+    padding: 6px 14px;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.logout-btn:hover {
+    background: #d43d3d
+}
